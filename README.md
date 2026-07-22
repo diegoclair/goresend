@@ -1,5 +1,24 @@
 # goresend
 
+<p align="center">
+ <b>A dependency-free Go client for the Resend email API, with built-in rate limiting and attachments</b><br><br>
+    <a href="https://github.com/diegoclair/goresend/tags" alt="GitHub tag">
+     <img src="https://img.shields.io/github/tag/diegoclair/goresend.svg" />
+    </a>
+    <a href='https://coveralls.io/github/diegoclair/goresend?branch=main'>
+     <img src='https://coveralls.io/repos/github/diegoclair/goresend/badge.svg?branch=main' alt='Coverage Status' />
+    </a>
+    <a href="https://github.com/diegoclair/goresend/actions">
+     <img src="https://github.com/diegoclair/goresend/actions/workflows/ci.yaml/badge.svg" alt="build status">
+    </a>
+    <a href="https://opensource.org/licenses/MIT">
+     <img src="https://img.shields.io/badge/License-MIT-yellow.svg" />
+    </a>
+    <a href='https://goreportcard.com/badge/github.com/diegoclair/goresend'>
+     <img src='https://goreportcard.com/badge/github.com/diegoclair/goresend' alt='Go Report'/>
+    </a>
+</p>
+
 A small, dependency-free Go client for the [Resend](https://resend.com) email API,
 with built-in daily / monthly / per-second rate limiting and file attachments.
 
@@ -159,6 +178,17 @@ branded copy. Template loading and rendering belong to the application (in
 LeaderPro they lived in `template.go`, tied to on-disk template layout and
 product-specific variables, so they were intentionally left out).
 
+## Contributing
+
+**Contributions are welcomed. :)**
+
+1. Fork the repository
+2. Create a new feature branch (`git checkout -b feature/<FEATURE NAME>`)
+3. Make the necessary changes
+4. Commit your changes (`git commit -m "Add some feature"`)
+5. Push your changes to your forked repository (`git push origin feature/<FEATURE NAME>`)
+6. Create a pull request to the main branch of the repository
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+goresend is [MIT licensed](./LICENSE).
