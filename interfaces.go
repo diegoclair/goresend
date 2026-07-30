@@ -20,14 +20,6 @@ type QuotaStore interface {
 	Get(ctx context.Context, key string) (int64, error)
 }
 
-// Sender is the send surface shared by Client and MockClient.
-type Sender interface {
-	Send(ctx context.Context, msg Message) error
-	DailyQuota() int
-	MonthlyQuota() int
-	Shutdown(ctx context.Context) error
-}
-
 // Logger is the minimal logging surface the package uses. Fields are passed as
 // alternating key/value pairs. Pass a no-op implementation to silence output.
 type Logger interface {

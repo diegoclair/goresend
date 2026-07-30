@@ -130,7 +130,7 @@ func TestSend_SuccessIncrementsCounters(t *testing.T) {
 	store := newFakeStore()
 	c := newTestClient(t, baseConfig(), store, srv)
 
-	if err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "<p>hi</p>"}); err != nil {
+	if _, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "<p>hi</p>"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if got := store.get(cacheKeyDailyCount); got != 1 {
@@ -151,7 +151,7 @@ func TestSend_FailureReleasesReservation(t *testing.T) {
 	store := newFakeStore()
 	c := newTestClient(t, baseConfig(), store, srv)
 
-	err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "x"})
+	_, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "x"})
 	if err == nil {
 		t.Fatal("expected send error")
 	}
@@ -172,11 +172,11 @@ func TestSend_DailyQuotaExceeded(t *testing.T) {
 
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		if err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"}); err != nil {
+		if _, err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"}); err != nil {
 			t.Fatalf("send %d: %v", i, err)
 		}
 	}
-	err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"})
+	_, err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"})
 	if !errors.Is(err, ErrDailyQuotaExceeded) {
 		t.Fatalf("err = %v, want ErrDailyQuotaExceeded", err)
 	}
@@ -195,10 +195,10 @@ func TestSend_MonthlyQuotaExceeded(t *testing.T) {
 	c := newTestClient(t, cfg, store, srv)
 
 	ctx := context.Background()
-	if err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"}); err != nil {
+	if _, err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"}); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
-	err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"})
+	_, err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"})
 	if !errors.Is(err, ErrMonthlyQuotaExceeded) {
 		t.Fatalf("err = %v, want ErrMonthlyQuotaExceeded", err)
 	}
@@ -221,7 +221,7 @@ func TestSend_ReserveBlocksThird(t *testing.T) {
 	ctx := context.Background()
 	sent := 0
 	for i := 0; i < 3; i++ {
-		if err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"}); err == nil {
+		if _, err := c.Send(ctx, Message{To: "u@example.com", Subject: "s", HTML: "x"}); err == nil {
 			sent++
 		}
 	}
@@ -237,7 +237,7 @@ func TestSend_AttachmentBase64(t *testing.T) {
 	c := newTestClient(t, baseConfig(), store, srv)
 
 	raw := []byte("hello-pdf-bytes")
-	err := c.Send(context.Background(), Message{
+	_, err := c.Send(context.Background(), Message{
 		To: "u@example.com", Subject: "s", HTML: "x",
 		Attachments: []Attachment{{Filename: "f.pdf", Content: raw, ContentType: "application/pdf"}},
 	})
@@ -258,6 +258,39 @@ func TestSend_AttachmentBase64(t *testing.T) {
 	}
 	if req.Attachments[0].Filename != "f.pdf" {
 		t.Errorf("filename = %q", req.Attachments[0].Filename)
+	}
+}
+
+func TestSend_ReturnsID(t *testing.T) {
+	srv := okServer(t, nil)
+	store := newFakeStore()
+	c := newTestClient(t, baseConfig(), store, srv)
+
+	result, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "<p>hi</p>"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if result.ID != "abc" {
+		t.Errorf("ID = %q, want %q", result.ID, "abc")
+	}
+}
+
+func TestSend_FailureReturnsEmptyResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"boom"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	store := newFakeStore()
+	c := newTestClient(t, baseConfig(), store, srv)
+
+	result, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "x"})
+	if err == nil {
+		t.Fatal("expected send error")
+	}
+	if result.ID != "" {
+		t.Errorf("ID = %q, want empty on failure", result.ID)
 	}
 }
 

@@ -56,7 +56,7 @@ if err != nil {
 }
 defer client.Shutdown(context.Background())
 
-err = client.Send(ctx, goresend.Message{
+result, err := client.Send(ctx, goresend.Message{
     To:      "user@example.com",
     Subject: "Welcome",
     HTML:    "<h1>Hi</h1>",
@@ -66,12 +66,18 @@ err = client.Send(ctx, goresend.Message{
         ContentType: "application/pdf",
     }},
 })
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.ID) // Resend message id
 ```
 
 `Send` blocks until the email is actually delivered to the Resend API (or the
-context is cancelled / the queue is full). The per-second limit is enforced by a
-single worker goroutine. `Timeout` bounds each HTTP call to Resend and defaults
-to 30s when left zero.
+context is cancelled / the queue is full), returning a `Result` with the
+Resend message id on success — the key to correlate a later delivery/open
+webhook with this send. The per-second limit is enforced by a single worker
+goroutine. `Timeout` bounds each HTTP call to Resend and defaults to 30s when
+left zero.
 
 ## Quotas: reserve / commit / release (no over-sending)
 
@@ -91,7 +97,7 @@ lets you exceed the limit, only occasionally block slightly early.
 Both quotas **block**. The library only reports; the caller decides what to do:
 
 ```go
-err := client.Send(ctx, msg)
+_, err := client.Send(ctx, msg)
 switch {
 case errors.Is(err, goresend.ErrDailyQuotaExceeded):
     // e.g. retry tomorrow, drop, or alert — your call
@@ -168,8 +174,10 @@ after base64 encoding.
 
 ## Mock
 
-`goresend.NewMock(logger, daily, monthly)` returns a `Sender` that logs instead
-of sending. Both `*Client` and `*MockClient` satisfy `goresend.Sender`.
+`goresend.NewMock(logger, daily, monthly)` returns a `*MockClient` that logs
+instead of sending — useful for running dev without real credentials. Its
+`Send` matches `*Client`'s signature but always returns an empty `Result`
+(there is no real Resend message id to report).
 
 ## Templating
 

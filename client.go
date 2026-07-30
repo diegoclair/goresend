@@ -47,6 +47,13 @@ type Message struct {
 	Attachments []Attachment
 }
 
+// Result is returned by Send on success. ID is the Resend message id, the
+// only reliable key to correlate a later delivery/open webhook with the send
+// that caused it.
+type Result struct {
+	ID string
+}
+
 // Client sends email through Resend with daily/monthly/per-second rate limits.
 type Client struct {
 	apiKey     string
@@ -69,7 +76,14 @@ type Client struct {
 type emailRequest struct {
 	ctx      context.Context
 	msg      Message
-	resultCh chan error
+	resultCh chan sendOutcome
+}
+
+// sendOutcome carries both the id and the error through resultCh, since a
+// successful send needs the id and a failed one only needs the error.
+type sendOutcome struct {
+	id  string
+	err error
 }
 
 type resendAttachment struct {
@@ -153,10 +167,11 @@ func New(cfg Config, store QuotaStore, log Logger) (*Client, error) {
 // Send reserves a quota slot, enqueues the message, and blocks until it is sent,
 // the context is done, or the queue is full. The reservation is atomic (reserve
 // before send); any failure after reserving releases the slot, so quotas can
-// never be exceeded under normal operation.
-func (c *Client) Send(ctx context.Context, msg Message) (err error) {
+// never be exceeded under normal operation. On success, Result carries the
+// Resend message id for correlating a later delivery/open webhook.
+func (c *Client) Send(ctx context.Context, msg Message) (result Result, err error) {
 	if err = c.reserve(ctx); err != nil {
-		return err
+		return Result{}, err
 	}
 	// Release on every path that fails after a successful reserve; a nil return
 	// means Resend accepted the message and the reservation is committed.
@@ -166,21 +181,25 @@ func (c *Client) Send(ctx context.Context, msg Message) (err error) {
 		}
 	}()
 
-	resultCh := make(chan error, 1)
+	resultCh := make(chan sendOutcome, 1)
 	req := emailRequest{ctx: ctx, msg: msg, resultCh: resultCh}
 
 	select {
 	case c.queue <- req:
 		select {
-		case err = <-resultCh:
-			return err
+		case outcome := <-resultCh:
+			err = outcome.err
+			return Result{ID: outcome.id}, err
 		case <-ctx.Done():
-			return fmt.Errorf("goresend: context cancelled while waiting for send: %w", ctx.Err())
+			err = fmt.Errorf("goresend: context cancelled while waiting for send: %w", ctx.Err())
+			return Result{}, err
 		}
 	case <-ctx.Done():
-		return fmt.Errorf("goresend: context cancelled while queueing: %w", ctx.Err())
+		err = fmt.Errorf("goresend: context cancelled while queueing: %w", ctx.Err())
+		return Result{}, err
 	default:
-		return fmt.Errorf("goresend: queue is full (%d waiting), try again later", c.queueSize)
+		err = fmt.Errorf("goresend: queue is full (%d waiting), try again later", c.queueSize)
+		return Result{}, err
 	}
 }
 
@@ -201,13 +220,13 @@ func (c *Client) sendToAPI(req emailRequest) {
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		c.reply(req, fmt.Errorf("goresend: marshal request: %w", err))
+		c.reply(req, sendOutcome{err: fmt.Errorf("goresend: marshal request: %w", err)})
 		return
 	}
 
 	httpReq, err := http.NewRequestWithContext(req.ctx, http.MethodPost, resendAPIURL, bytes.NewReader(jsonBody))
 	if err != nil {
-		c.reply(req, fmt.Errorf("goresend: create request: %w", err))
+		c.reply(req, sendOutcome{err: fmt.Errorf("goresend: create request: %w", err)})
 		return
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
@@ -215,23 +234,23 @@ func (c *Client) sendToAPI(req emailRequest) {
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		c.reply(req, fmt.Errorf("goresend: send request: %w", err))
+		c.reply(req, sendOutcome{err: fmt.Errorf("goresend: send request: %w", err)})
 		return
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.reply(req, fmt.Errorf("goresend: read response: %w", err))
+		c.reply(req, sendOutcome{err: fmt.Errorf("goresend: read response: %w", err)})
 		return
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp resendError
 		if json.Unmarshal(respBody, &errResp) != nil || errResp.Message == "" {
-			c.reply(req, fmt.Errorf("goresend: API error (status %d): %s", resp.StatusCode, string(respBody)))
+			c.reply(req, sendOutcome{err: fmt.Errorf("goresend: API error (status %d): %s", resp.StatusCode, string(respBody))})
 		} else {
-			c.reply(req, fmt.Errorf("goresend: API error: %s - %s", errResp.Name, errResp.Message))
+			c.reply(req, sendOutcome{err: fmt.Errorf("goresend: API error: %s - %s", errResp.Name, errResp.Message)})
 		}
 		return
 	}
@@ -241,7 +260,7 @@ func (c *Client) sendToAPI(req emailRequest) {
 		c.log.Info(req.ctx, "goresend: email sent", "email_id", success.ID, "to", req.msg.To)
 	}
 
-	c.reply(req, nil)
+	c.reply(req, sendOutcome{id: success.ID})
 }
 
 func (c *Client) fromAddress() string {
@@ -251,9 +270,9 @@ func (c *Client) fromAddress() string {
 	return fmt.Sprintf("%s <%s>", c.fromName, c.fromEmail)
 }
 
-func (c *Client) reply(req emailRequest, err error) {
+func (c *Client) reply(req emailRequest, outcome sendOutcome) {
 	select {
-	case req.resultCh <- err:
+	case req.resultCh <- outcome:
 	default:
 	}
 }

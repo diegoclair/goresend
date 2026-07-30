@@ -18,10 +18,10 @@ func NewMock(log Logger, dailyQuota, monthlyQuota int) *MockClient {
 	return &MockClient{log: log, dailyQuota: dailyQuota, monthlyQuota: monthlyQuota}
 }
 
-func (c *MockClient) Send(ctx context.Context, msg Message) error {
+func (c *MockClient) Send(ctx context.Context, msg Message) (Result, error) {
 	c.log.Info(ctx, "goresend: [MOCK] would send email",
 		"to", msg.To, "subject", msg.Subject, "attachments", len(msg.Attachments))
-	return nil
+	return Result{}, nil
 }
 
 func (c *MockClient) DailyQuota() int   { return c.dailyQuota }
