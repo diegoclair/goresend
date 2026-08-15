@@ -316,3 +316,102 @@ func TestNew_DefaultTimeout(t *testing.T) {
 		t.Errorf("timeout = %v, want 5s", c2.httpClient.Timeout)
 	}
 }
+
+func TestSend_ForwardsHeaders(t *testing.T) {
+	var body []byte
+	srv := okServer(t, &body)
+	c := newTestClient(t, baseConfig(), newFakeStore(), srv)
+
+	_, err := c.Send(context.Background(), Message{
+		To: "u@example.com", Subject: "s", HTML: "x",
+		Headers: map[string]string{
+			"List-Unsubscribe":      "<https://example.com/u/tok>",
+			"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var req resendRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if got := req.Headers["List-Unsubscribe"]; got != "<https://example.com/u/tok>" {
+		t.Errorf("List-Unsubscribe = %q", got)
+	}
+	if got := req.Headers["List-Unsubscribe-Post"]; got != "List-Unsubscribe=One-Click" {
+		t.Errorf("List-Unsubscribe-Post = %q", got)
+	}
+}
+
+// Without headers the key must be absent, not an empty object: Resend rejects
+// some empty containers, and a nil map is the caller's normal case.
+func TestSend_OmitsHeadersWhenUnset(t *testing.T) {
+	var body []byte
+	srv := okServer(t, &body)
+	c := newTestClient(t, baseConfig(), newFakeStore(), srv)
+
+	if _, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "x"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if _, ok := raw["headers"]; ok {
+		t.Error("headers must be omitted when the message carries none")
+	}
+}
+
+func TestRemainingDaily(t *testing.T) {
+	srv := okServer(t, nil)
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.DailyQuota = 3
+	c := newTestClient(t, cfg, store, srv)
+
+	remaining, err := c.RemainingDaily(context.Background())
+	if err != nil {
+		t.Fatalf("RemainingDaily: %v", err)
+	}
+	if remaining != 3 {
+		t.Fatalf("remaining = %d, want 3 before any send", remaining)
+	}
+
+	for i := 0; i < 2; i++ {
+		if _, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "x"}); err != nil {
+			t.Fatalf("Send %d: %v", i, err)
+		}
+	}
+
+	remaining, err = c.RemainingDaily(context.Background())
+	if err != nil {
+		t.Fatalf("RemainingDaily: %v", err)
+	}
+	if remaining != 1 {
+		t.Errorf("remaining = %d, want 1 after two sends", remaining)
+	}
+}
+
+// A counter above the quota (a quota lowered mid-window) must read as zero,
+// never as a negative budget a caller would treat as room to send.
+func TestRemainingDaily_NeverNegative(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.DailyQuota = 2
+	c := newTestClient(t, cfg, store, okServer(t, nil))
+
+	if _, err := store.Increment(context.Background(), cacheKeyDailyCount, 5, 0); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	remaining, err := c.RemainingDaily(context.Background())
+	if err != nil {
+		t.Fatalf("RemainingDaily: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("remaining = %d, want 0", remaining)
+	}
+}

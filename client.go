@@ -45,6 +45,10 @@ type Message struct {
 	Subject     string
 	HTML        string
 	Attachments []Attachment
+	// Headers are extra SMTP headers, sent verbatim. The reason this exists is
+	// List-Unsubscribe + List-Unsubscribe-Post (RFC 8058): Gmail and Yahoo want
+	// one-click opt-out from bulk senders, and it can only travel as a header.
+	Headers map[string]string
 }
 
 // Result is returned by Send on success. ID is the Resend message id, the
@@ -98,6 +102,7 @@ type resendRequest struct {
 	Subject     string             `json:"subject"`
 	HTML        string             `json:"html"`
 	Attachments []resendAttachment `json:"attachments,omitempty"`
+	Headers     map[string]string  `json:"headers,omitempty"`
 }
 
 type resendResponse struct {
@@ -209,6 +214,7 @@ func (c *Client) sendToAPI(req emailRequest) {
 		To:      []string{req.msg.To},
 		Subject: req.msg.Subject,
 		HTML:    req.msg.HTML,
+		Headers: req.msg.Headers,
 	}
 	for _, a := range req.msg.Attachments {
 		body.Attachments = append(body.Attachments, resendAttachment{
@@ -275,6 +281,26 @@ func (c *Client) reply(req emailRequest, outcome sendOutcome) {
 	case req.resultCh <- outcome:
 	default:
 	}
+}
+
+// RemainingDaily reports how many sends still fit today. It exists so a caller
+// draining a large batch can stop short of the limit and leave room for the
+// messages a user is waiting on — the quota is one bucket, and this package
+// deliberately does not rank what goes into it.
+//
+// The number is a snapshot, not a reservation: concurrent senders may consume
+// slots between the read and the next Send. Treat it as a budget, not a promise.
+func (c *Client) RemainingDaily(ctx context.Context) (int, error) {
+	used, err := c.store.Get(ctx, cacheKeyDailyCount)
+	if err != nil {
+		return 0, fmt.Errorf("goresend: read daily count: %w", err)
+	}
+
+	remaining := c.dailyQuota - int(used)
+	if remaining < 0 {
+		return 0, nil
+	}
+	return remaining, nil
 }
 
 // DailyQuota returns the configured daily limit.

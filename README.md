@@ -108,6 +108,49 @@ case err != nil:
 }
 ```
 
+### Leaving room for what matters (`RemainingDaily`)
+
+The quota is one bucket and the library does not rank what goes into it. A large
+batch draining it would starve the messages a user is actually waiting on (a
+password reset, a receipt). `RemainingDaily` lets a batch stop short:
+
+```go
+const reserveForTransactional = 30
+
+for _, recipient := range batch {
+    remaining, err := client.RemainingDaily(ctx)
+    if err != nil || remaining <= reserveForTransactional {
+        break // resume next window; the rest of today's quota is not ours
+    }
+    _, _ = client.Send(ctx, messageFor(recipient))
+}
+```
+
+It is a snapshot, not a reservation: concurrent senders may take slots between
+the read and the next `Send`. Treat it as a budget, not a promise.
+
+⚠️ Counters reset at **midnight UTC**, not local midnight — a batch that stopped
+on quota resumes then.
+
+## Custom headers
+
+`Message.Headers` is sent verbatim. This is how one-click unsubscribe travels
+(RFC 8058), which Gmail and Yahoo expect from bulk senders:
+
+```go
+_, err := client.Send(ctx, goresend.Message{
+    To:      "user@example.com",
+    Subject: "Newsletter",
+    HTML:    body,
+    Headers: map[string]string{
+        "List-Unsubscribe":      "<https://example.com/unsubscribe/TOKEN>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    },
+})
+```
+
+Transactional mail leaves it unset, and the key is then omitted from the payload.
+
 ## QuotaStore adapter
 
 Counters are persisted through your own store so limits hold across instances
