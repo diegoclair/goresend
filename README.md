@@ -105,7 +105,7 @@ case err != nil:
 }
 ```
 
-### Leaving room for what matters (`RemainingDaily`)
+### Leaving room for what matters (`RemainingDaily`, `RemainingMonthly`)
 
 The quota is one bucket and the library does not rank what goes into it. A large
 batch draining it would starve the messages a user is actually waiting on (a
@@ -127,7 +127,15 @@ It is a snapshot, not a reservation: concurrent senders may take slots between
 the read and the next `Send`. Treat it as a budget, not a promise.
 
 ⚠️ Counters reset at **midnight UTC**, not local midnight — a batch that stopped
-on quota resumes then.
+on quota resumes then. `RemainingMonthly` answers the same for the month, whose
+counter resets on the first of the month UTC.
+
+## Per-message sender name and safe retries
+
+`Message.FromName` replaces the configured display name for one message; the
+address stays the client's. `Message.IdempotencyKey` travels as Resend's
+`Idempotency-Key` header, so a retry after a timeout never sends twice within
+the 24 hours Resend keeps the key, as long as the payload is identical.
 
 ## Custom headers
 

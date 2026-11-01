@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,6 +50,10 @@ type Message struct {
 	// List-Unsubscribe + List-Unsubscribe-Post (RFC 8058): Gmail and Yahoo want
 	// one-click opt-out from bulk senders, and it can only travel as a header.
 	Headers map[string]string
+	// FromName replaces the Config display name for this message; the address stays the client's.
+	FromName string
+	// IdempotencyKey makes a retry safe: Resend answers a repeated key from its first send for 24 hours.
+	IdempotencyKey string
 }
 
 // Result is returned by Send on success. ID is the Resend message id, the
@@ -210,7 +215,7 @@ func (c *Client) Send(ctx context.Context, msg Message) (result Result, err erro
 
 func (c *Client) sendToAPI(req emailRequest) {
 	body := resendRequest{
-		From:    c.fromAddress(),
+		From:    c.fromAddress(req.msg),
 		To:      []string{req.msg.To},
 		Subject: req.msg.Subject,
 		HTML:    req.msg.HTML,
@@ -237,6 +242,9 @@ func (c *Client) sendToAPI(req emailRequest) {
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
+	if req.msg.IdempotencyKey != "" {
+		httpReq.Header.Set("Idempotency-Key", req.msg.IdempotencyKey)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -269,11 +277,23 @@ func (c *Client) sendToAPI(req emailRequest) {
 	c.reply(req, sendOutcome{id: success.ID})
 }
 
-func (c *Client) fromAddress() string {
-	if c.fromName == "" {
+func (c *Client) fromAddress(msg Message) string {
+	name := msg.FromName
+	if name == "" {
+		name = c.fromName
+	}
+	if name == "" {
 		return c.fromEmail
 	}
-	return fmt.Sprintf("%s <%s>", c.fromName, c.fromEmail)
+	return fmt.Sprintf("%s <%s>", quoteDisplayName(name), c.fromEmail)
+}
+
+// RFC 5322 reads a comma or a colon in a bare display name as the end of the address.
+func quoteDisplayName(name string) string {
+	if !strings.ContainsAny(name, `()<>[]:;@\,."`) {
+		return name
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(name) + `"`
 }
 
 func (c *Client) reply(req emailRequest, outcome sendOutcome) {
@@ -297,6 +317,21 @@ func (c *Client) RemainingDaily(ctx context.Context) (int, error) {
 	}
 
 	remaining := c.dailyQuota - int(used)
+	if remaining < 0 {
+		return 0, nil
+	}
+	return remaining, nil
+}
+
+// RemainingMonthly reports how many sends still fit this month, under the same
+// terms as RemainingDaily: a snapshot to budget with, not a reservation.
+func (c *Client) RemainingMonthly(ctx context.Context) (int, error) {
+	used, err := c.store.Get(ctx, cacheKeyMonthlyCount)
+	if err != nil {
+		return 0, fmt.Errorf("goresend: read monthly count: %w", err)
+	}
+
+	remaining := c.monthlyQuota - int(used)
 	if remaining < 0 {
 		return 0, nil
 	}

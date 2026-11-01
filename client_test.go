@@ -415,3 +415,102 @@ func TestRemainingDaily_NeverNegative(t *testing.T) {
 		t.Errorf("remaining = %d, want 0", remaining)
 	}
 }
+
+func TestRemainingMonthly(t *testing.T) {
+	store := newFakeStore()
+	store.counts[cacheKeyMonthlyCount] = 40
+	c, err := New(baseConfig(), store, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Shutdown(context.Background())
+
+	got, err := c.RemainingMonthly(context.Background())
+	if err != nil {
+		t.Fatalf("RemainingMonthly: %v", err)
+	}
+	if got != 60 {
+		t.Fatalf("RemainingMonthly = %d, want 60", got)
+	}
+}
+
+func TestRemainingMonthly_NeverNegative(t *testing.T) {
+	store := newFakeStore()
+	store.counts[cacheKeyMonthlyCount] = 500
+	c, err := New(baseConfig(), store, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Shutdown(context.Background())
+
+	got, err := c.RemainingMonthly(context.Background())
+	if err != nil {
+		t.Fatalf("RemainingMonthly: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("RemainingMonthly = %d, want 0", got)
+	}
+}
+
+func TestSend_FromNameReplacesTheConfiguredOneOnTheSameAddress(t *testing.T) {
+	cases := []struct {
+		name, configured, perMessage, want string
+	}{
+		{"no name at all is the bare address", "", "", "from@example.com"},
+		{"the configured name stands when the message names none", "Rednev", "", "Rednev <from@example.com>"},
+		{"the message's name wins", "Rednev", "Diego Clair", "Diego Clair <from@example.com>"},
+		{"a comma is quoted or it would end the address", "Rednev", "Diego, da Rednev", `"Diego, da Rednev" <from@example.com>`},
+		{"a quote inside a quoted name is escaped", "Rednev", `Diego "DC" Clair`, `"Diego \"DC\" Clair" <from@example.com>`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got resendRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &got)
+				_, _ = w.Write([]byte(`{"id":"re_1"}`))
+			}))
+			defer srv.Close()
+
+			cfg := baseConfig()
+			cfg.FromName = tc.configured
+			c := newTestClient(t, cfg, newFakeStore(), srv)
+
+			if _, err := c.Send(context.Background(), Message{To: "to@example.com", FromName: tc.perMessage}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			if got.From != tc.want {
+				t.Fatalf("from = %q, want %q", got.From, tc.want)
+			}
+		})
+	}
+}
+
+func TestSend_IdempotencyKeyTravelsAsTheRequestHeaderOnlyWhenSet(t *testing.T) {
+	cases := []struct {
+		name, key string
+	}{
+		{"with a key", "recipient-uuid"},
+		{"without one", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got http.Header
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Clone()
+				_, _ = w.Write([]byte(`{"id":"re_1"}`))
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, baseConfig(), newFakeStore(), srv)
+			if _, err := c.Send(context.Background(), Message{To: "to@example.com", IdempotencyKey: tc.key}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			if have := got.Get("Idempotency-Key"); have != tc.key {
+				t.Fatalf("Idempotency-Key = %q, want %q", have, tc.key)
+			}
+		})
+	}
+}

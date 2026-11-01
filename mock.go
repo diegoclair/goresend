@@ -34,4 +34,9 @@ func (c *MockClient) RemainingDaily(context.Context) (int, error) {
 	return c.dailyQuota, nil
 }
 
+// RemainingMonthly always reports the full quota, for the same reason as RemainingDaily.
+func (c *MockClient) RemainingMonthly(context.Context) (int, error) {
+	return c.monthlyQuota, nil
+}
+
 func (c *MockClient) Shutdown(context.Context) error { return nil }
