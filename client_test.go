@@ -345,6 +345,25 @@ func TestSend_ForwardsHeaders(t *testing.T) {
 	}
 }
 
+func TestSend_ReplyToTravelsInTheAPIField(t *testing.T) {
+	var body []byte
+	srv := okServer(t, &body)
+	c := newTestClient(t, baseConfig(), newFakeStore(), srv)
+
+	_, err := c.Send(context.Background(), Message{To: "u@example.com", Subject: "s", HTML: "x", ReplyTo: "owner@example.com"})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var req resendRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if req.ReplyTo != "owner@example.com" {
+		t.Errorf("reply_to = %q", req.ReplyTo)
+	}
+}
+
 // Without headers the key must be absent, not an empty object: Resend rejects
 // some empty containers, and a nil map is the caller's normal case.
 func TestSend_OmitsHeadersWhenUnset(t *testing.T) {

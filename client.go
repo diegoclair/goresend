@@ -50,6 +50,8 @@ type Message struct {
 	// List-Unsubscribe + List-Unsubscribe-Post (RFC 8058): Gmail and Yahoo want
 	// one-click opt-out from bulk senders, and it can only travel as a header.
 	Headers map[string]string
+	// ReplyTo goes in the API's own field: Resend does not honour a Reply-To entry in Headers.
+	ReplyTo string
 	// FromName replaces the Config display name for this message; the address stays the client's.
 	FromName string
 	// IdempotencyKey makes a retry safe: Resend answers a repeated key from its first send for 24 hours.
@@ -108,6 +110,7 @@ type resendRequest struct {
 	HTML        string             `json:"html"`
 	Attachments []resendAttachment `json:"attachments,omitempty"`
 	Headers     map[string]string  `json:"headers,omitempty"`
+	ReplyTo     string             `json:"reply_to,omitempty"`
 }
 
 type resendResponse struct {
@@ -220,6 +223,7 @@ func (c *Client) sendToAPI(req emailRequest) {
 		Subject: req.msg.Subject,
 		HTML:    req.msg.HTML,
 		Headers: req.msg.Headers,
+		ReplyTo: req.msg.ReplyTo,
 	}
 	for _, a := range req.msg.Attachments {
 		body.Attachments = append(body.Attachments, resendAttachment{
